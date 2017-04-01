@@ -31,6 +31,8 @@
 
 , "show_success_but_no_output_message": false
 
+, "variables_in_command_prompt": false
+
   /**
    * How frequently should the progress bars change during long-running
    * processes:

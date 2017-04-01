@@ -20,6 +20,8 @@ class ShellCommandCommand(SH.TextCommand):
 
         view, window = self.get_view_and_window()
 
+        self.settings = sublime.load_settings('ShellCommand.sublime-settings')
+
         # Map previous use of 'region' parameter:
         #
         if region is True:
@@ -71,71 +73,77 @@ class ShellCommandCommand(SH.TextCommand):
 
             self.run_shell_command(commands, stdin=stdin, panel=panel, target=target, title=title, syntax=syntax, refresh=refresh, wait_for_completion=wait_for_completion, root_dir=root_dir)
 
+        def _on_input_end(argdict, templates):
+            argstr = []
+            for template in templates:
+                if len(argdict):
+                    command = template.format(**argdict)
+                else:
+                    command = template
+                argstr.append(command)
+
+            # Now we're finally ready to run the command:
+            #
+            _C1(argstr)
+
+        def _ask_to_user(asks, templates, callback):
+            askstack = asks[:]
+            arglist = []
+
+            def _on_done(arg):
+                arglist.append(arg)
+                if askstack:
+                    _run()
+                else:
+                    # all variable input
+                    argdict = {x['variable']:y for x, y in zip(asks, arglist)}
+                    callback(argdict, templates)
+
+            def _on_cancel():
+                callback([])
+
+            def _run():
+                ask = askstack.pop(0)
+                window.show_input_panel(ask['message'],
+                    ask['default'], _on_done, None, _on_cancel)
+            _run()
+
+        def _substitute_vars_then_run(command):
+            from . import VariableSubstitution as VS
+
+            asks, templates = VS.parse_command(command, view)
+            if asks:
+                _ask_to_user(asks, templates, _on_input_end)
+            else:
+                _on_input_end({},templates)
+
         # If no command is specified then we prompt for one, otherwise
         # we can just execute the command:
         #
         if command is None:
             if prompt is None:
                 prompt = self.default_prompt
-            window.show_input_panel(prompt, '', _C1, None, None)
+
+            variables_in_command_prompt = self.settings.get('variables_in_command_prompt')
+
+            do_command = _substitute_vars_then_run if variables_in_command_prompt else _C1
+
+            window.show_input_panel(prompt, '', do_command, None, None)
         else:
             # A command can contain variables for substitution. The actual
             # substitution takes place in the module VariableSubstitution,
             # but if a value is not defined then this block prompts the user
             # for a value:
             #
-            from . import VariableSubstitution as VS
+            _substitue_vars_then_run(command)
 
-            asks, templates = VS.parse_command(command, view)
-            argdict = {}
-
-            def _on_input_end(argdict):
-                if len(asks) != len(argdict):
-                    return  # NOTE: assertion code (Please remove after well tested)
-                argstr = []
-                for template in templates:
-                    if len(argdict):
-                        command = template.format(**argdict)
-                    else:
-                        command = template
-                    argstr.append(command)
-
-                # Now we're finally ready to run the command:
-                #
-                _C1(argstr)
-
-            def _ask_to_user(asks, callback):
-                askstack = asks[:]
-                arglist = []
-
-                def _on_done(arg):
-                    arglist.append(arg)
-                    if askstack:
-                        _run()
-                    else:
-                        # all variable input
-                        argdict = {x['variable']:y for x, y in zip(asks, arglist)}
-                        callback(argdict)
-
-                def _on_cancel():
-                    callback([])
-
-                def _run():
-                    ask = askstack.pop(0)
-                    window.show_input_panel(ask['message'],
-                        ask['default'], _on_done, None, _on_cancel)
-                _run()
-
-            if asks:
-                _ask_to_user(asks, _on_input_end)
-            else:
-                _on_input_end({})
+            
 
     def run_shell_command(self, command=None, stdin=None, panel=False, target=None, title=None, syntax=None, refresh=False, console=None, working_dir=None, wait_for_completion=None, root_dir=False):
 
         view, window = self.get_view_and_window()
 
-        settings = sublime.load_settings('ShellCommand.sublime-settings')
+        
 
         if command is None:
             sublime.message_dialog('No command provided.')
@@ -156,13 +164,13 @@ class ShellCommandCommand(SH.TextCommand):
         # gets opened then the progress bar will get moved to that:
         #
         self.progress = SH.ProgressDisplay(view, message, message,
-          settings.get('progress_display_heartbeat'))
+          self.settings.get('progress_display_heartbeat'))
         self.progress.start()
 
         # Grab the config setting that determines whether to scroll the end of the view
         # so that it's visible:
         #
-        scroll_show_maximum_output = settings.get('comint-scroll-show-maximum-output')
+        scroll_show_maximum_output = self.settings.get('comint-scroll-show-maximum-output')
 
         def _C2(output):
 
@@ -174,9 +182,9 @@ class ShellCommandCommand(SH.TextCommand):
                 # If there has been no output:
                 #
                 if self.output_written is False:
-                    show_message = settings.get('show_success_but_no_output_message')
+                    show_message = self.settings.get('show_success_but_no_output_message')
                     if show_message:
-                        output = settings.get('success_but_no_output_message')
+                        output = self.settings.get('success_but_no_output_message')
 
                 # Check whether the initiating view needs refreshing:
                 #
@@ -214,7 +222,7 @@ class ShellCommandCommand(SH.TextCommand):
                         if self.finished is False:
                             self.progress.stop()
                             self.progress = SH.ProgressDisplay(self.output_target, message, message,
-                              settings.get('progress_display_heartbeat'))
+                              self.settings.get('progress_display_heartbeat'))
                             self.progress.start()
 
                     # Append our output to whatever buffer is being used, and
@@ -223,7 +231,7 @@ class ShellCommandCommand(SH.TextCommand):
                     self.output_target.append_text(output, scroll_show_maximum_output=scroll_show_maximum_output)
                     self.output_written = True
 
-        return self.run_shell_command_raw(command, _C2, stdin=stdin, settings=settings, working_dir=working_dir, wait_for_completion=wait_for_completion, root_dir=root_dir)
+        return self.run_shell_command_raw(command, _C2, stdin=stdin, settings=self.settings, working_dir=working_dir, wait_for_completion=wait_for_completion, root_dir=root_dir)
 
     def run_shell_command_raw(self, *args, **kwargs):
 
